@@ -1,0 +1,1622 @@
+Anon        : False
+Extended    : True
+TechReport  : False
+Logo        : False
+Submit      : True
+
+Title       : Sound and Complete Type Inference &br;for Closed Effect Rows
+Short Title : &Title;
+Doc class   : [runningheads]llncs
+
+
+@if !Anon {
+Author      : Kazuki Ikemori$^1$
+Affiliation : Tokyo Institute of Technology, Tokyo, Japan
+Email       : ikemori.k.aa@prg.is.titech.ac.jp
+
+Author      : Youyou Cong$^2$
+Affiliation : Tokyo Institute of Technology, Tokyo, Japan
+Email       : cong@c.titech.ac.jp
+
+Author      : Hidehiko Masuhara$^3$
+Affiliation : Tokyo Institute of Technology, Tokyo, Japan
+Email       : masuhara@acm.org
+
+Author      : Daan Leijen$^4$
+Affiliation : Microsoft Research, Seattle USA
+Email       : daan@microsoft.com
+
+Author Running : K. Ikemori et al.
+}
+@if Anon {
+  Author        : Anonymous
+  Author Running: Anon.
+}
+
+kazuki {
+  .todo-style
+  before: "**Kazuki**. ";
+  border-left: 3pt solid navy;
+}
+
+naoya {
+  .todo-style
+  before: "**Naoya**. ";
+  border-left: 3pt solid blue;
+}
+
+daan {
+  .todo-style
+  before: "**Daan**. ";
+  border-left: 3pt solid teal;
+}
+
+youyou {
+  .todo-style
+  before: "**Youyou**. ";
+  border-left: 3pt solid purple;
+}
+
+[INCLUDE=style/llncs]
+[INCLUDE=koka-style]
+[INCLUDE=paper-style]
+
+smallnegskip       : []{display: block; margin-bottom: -0.5em }
+mednegskip         : []{display: block; margin-bottom: -1em }
+bignegskip         : []{display: block; margin-bottom: -2em }
+
+
+Bibliography    : references.bib
+Math Dpi        : 302
+Math Concurrency: 8
+
+Tex Doc Header*:
+    %\addtolength{\textheight}{5pt}
+    %\linespread{0.98}
+    \setlength\textfloatsep{0.5\textfloatsep}
+    \setlength\mdpreskip{1ex}
+
+
+[TITLE]
+
+~ HtmlOnly
+[TOC]
+~
+
+
+~ MathDefs
+\setlength{\fboxsep}{0.1ex}
+%\definecolor{light-gray}{gray}{0.85}
+\newcommand{\gray}[1]{\colorbox{gainsboro}{$#1$}}
+\definecolor{sidecolor}{HTML}{788ca2}
+\newcommand{\fullwidth}[1]{\cspan{#1}{\hspace*{\dimexpr\linewidth - 1ex\relax}\vrule height0\baselineskip depth 0\baselineskip width 0\baselineskip}}
+\newcommand{\side}[1]{{\color{sidecolor}{#1}}}
+
+\newcommand\tr[1]{\lceil#1\rceil}
+\newcommand{\trl}[1]{\tr{#1}^{l}}
+\newcommand{\trm}[1]{\tr{#1}^{m}}
+\newcommand\tru[1]{\lfloor#1\rfloor}
+\newcommand\trmon[1]{\lfloor{#1}\rfloor}
+\newcommand\trx[1]{\lceil\!\!\lceil#1\rceil\!\!\rceil}
+
+\newcommand\ctx[1]{\lceil#1\rceil}
+\newcommand\ev[1]{\overline{#1}}
+\newcommand\evdecl[1]{\underline{#1}}
+\newcommand\evt[1]{\llbracket #1 \rrbracket}%
+
+\newcommand\under[2]{\underset{\raisebox{2mm}{$\scriptstyle #2$}}{#1}}
+%\newcommand\inhx[2]{\under{#1}{\uparrow   \makebox[0pt]{\raisebox{-0.6ex}{$\scriptstyle\kern 1.3ex #2$}}}}
+\newcommand\inhx[2]{\under{#1}{\under{\uparrow}{#2}}}
+%\newcommand\synx[2]{\under{#1}{\downarrow \makebox[0pt]{\raisebox{-0.6ex}{$\scriptstyle\kern 2ex #2$}}}}
+\newcommand\synx[2]{\under{#1}{\under{\downarrow}{#2}}}
+\newcommand\inh[1]{\under{#1}{\uparrow}}
+\newcommand\syn[1]{\under{#1}{\downarrow}}
+\newcommand\append[2]{\evec{#1\midbar #2}} %{#1}{+}\!\!{+}{#2}}
+\newcommand\appendop{\mathbin{{+}\!\!{+}}}
+
+\newcommand\eraset[1]{#1^{*}} % how to erase types?
+\newcommand\erasetp[1]{(#1)^{*}}
+\newcommand\res{\mathid{restricted}}
+
+\newcommand{\hole}{{\scriptstyle\square}}
+
+\newcommand{\cspan}[2]{\multicolumn{#1}{l}{#2}}
+
+\newcommand{\downstrut}{\vrule height 0ex depth 1.5ex width 0pt\relax}
+
+\newcommand{\prefix}{\leqslant}
+~
+
+
+~ Abstract
+Koka is a functional programming language that has algebraic effect handlers and a row-based effect system.
+The row-based effect system infers types by naively applying the Hindley-Milner type inference. However, it infers effect-polymorphic types for many functions, which are hard to read by the programmers and have a negative runtime performance impact to the evidence-passing translation.
+In order to improve readability and runtime efficiency, we aim to infer _closed_ effect rows when possible, and _open_ those closed effect rows automatically at instantiation to avoid loss of typability.
+This paper gives a type inference algorithm with the $@open$ and $@close$ mechanisms.
+Along with the soundness and the completeness, we proved that the algorithm infers most general types.
+
+~~ TexRaw
+\keywords{Algebraic effects and handlers \and Type inference}
+~~
+~
+
+
+
+
+# Introduction
+Koka [@Leijen:algeff; @Xie:multip] is a functional programming language that has algebraic effects and handlers [@Plotkin:effects; @KammarPlotkin:handlers] which are a recently introduced abstraction of computational effects.
+An important aspect[^aspect] of Koka is that it tracks the (side) effects of functions in their type.
+For example, the following function:
+```
+fun sqr( x : int ) : <> int
+  x * x
+```
+has an empty effect row type `:<>` as it has no side effect at all. In contrast, a function like:
+```
+fun head( xs : list<a> ) : <exn> a
+  match xs
+    Cons(x,xx) -> x
+```
+gets the `:<exn>` effect row type as it may raise an exception at runtime (if we pass an empty list).
+To track effects, Koka uses row-based effect types [@Leijen:scopedlabels].
+These are quite suitable to combine with standard Hindley-Milner type inference
+as row equality has decidable unification (unlike subtyping for example).
+
+[^aspect]:
+    Koka is the first practical language that tracks the (side) effects of functions in their type.
+
+When doing straightforward Hindley-Milner type inference with
+row-based effect types many functions will be 
+polymorphic in the tail of the effect row (we call such effect rows _open_).
+For example, the naively inferred types of the previous two functions would be:
+```
+fun sqr : int -> e int
+fun head: list<a> -> <exn|e> a
+```
+Observe that both types are polymorphic in the effect tail as effect variable `:e`. These are in a way the natural
+types, signifying for example that we can use `sqr` in any effectful context.
+However, in practice, we prefer closed types instead, as
+these are easier to explain, and easier to read and write without needing to 
+always consider the polymorphic tail. 
+
+Moreover, it is possible to generate more efficient code for functions
+with closed effect rows.
+When executing an effect operation (which is similar to raising an exception),
+there is generally a dynamic search at runtime for a corresponding handler of that effect.
+This can be expensive, and Koka uses _evidence passing_  [@xie2020effect; @Xie:multip] to
+pass handler information as a vector at runtime. When an effect row is closed, the
+runtime shape of the vector is statically determined, and instead of searching for a handler,
+we can select the right handler at a fixed offset in the vector. This can be
+much more efficient.
+
+Therefore, the type inference algorithm in the current Koka compiler 
+generally infers closed effect rows for function bindings, where
+it relies on two mechanisms, $@open$ and $@close$, for converting between open and closed function types.
+However, the opening and closing features of the inference algorithm have never been formalized.
+
+In this paper, we make the following contributions:
+
+* We formalize type inference with the $@open$ and $@close$ mechanisms
+  precisely (Section [#sec-syntax-directed-inf]).
+
+* We prove that the type inference algorithm is sound and
+  complete (Section [#sec-type-infer]) and infers most general types.
+
+First, we give an introduction to algebraic effects and handlers, and
+explain what kind of types we would like to infer (Section [#sec-motivation]).
+Next, we present an implicitly typed calculus with algebraic effects and handlers, and give a set of declarative type inference rules (Section [#sec-implicit-calculus]).
+Then, we define syntax-directed type inference rules and show they are sound and complete with respect to the declarative rules (Section [#sec-syntax-directed-inf]).
+We also define a type inference algorithm and prove its soundness and completeness (Section [#sec-type-infer]).
+Lastly, we discuss related work (Section [#sec-related-work]) and conclude with future directions (Section [#sec-conclusion]).
+
+
+# Motivation { #sec-motivation; }
+## Algebraic Effects and Handlers
+Algebraic effects and handlers [@Plotkin:effects; @KammarPlotkin:handlers] are a uniform mechanism
+for representing computational effects.
+When programming with algebraic effects and handlers,
+the user first declares an effect with a series of _operations_.
+They then define a handler that specifies the meaning of operations,
+using the continuation (`resume` in Koka) surrounding the operations.
+As an example, let us implement a reader effect in Koka.
+
+```
+effect read2
+  ask-int() : int
+  ask-bool(): bool
+```
+
+The reader effect `read2` has two operations `ask-int` and `ask-bool`,
+which take no argument and return an integer and a boolean, respectively.
+Below is a program that uses the two operations.
+
+```
+handler {
+  ask-int()  { resume(12)   }
+  ask-bool() { resume(True) }
+} {
+  if ask-bool() then ask-int() else 42
+}
+```
+
+In the above program, the conditional expression is surrounded by a handler
+that specifies the meaning of `ask-int` and `ask-bool`.
+The evaluation goes as follows.
+First, `ask-bool()` is interpreted by the second clause of the handler,
+which says: continue (`resume`) evaluation with the value `True`.
+Second, the conditional expression reduces to the `then`-clause.
+Third, `ask-int()` is interpreted by the first clause of the handler,
+which says: continue evaluation with the value `12`.
+Thus, the program evaluates to `12`.
+
+
+## Naive Hindley-Milner Type Inference with Algebraic Effects and Handlers
+Koka employs a row-based effect system similar to a record type system [@Leijen:scopedlabels].
+It is also equipped with polymorphic type inference,
+which is similar to the Hindley-Milner type inference
+but has an additional mechanism for manipulating effects.
+
+It turns out that the types inferred by a natural extension of the Hindley-Milner inference are not suitable for evidence passing [@xie2020effect; @Xie:multip].
+As an example, consider the function `f` belonw.
+
+```
+fun f(x)
+  ask-int()
+  x
+```
+This function `f` is inferred to have the type `:forall<a,e1> a -> <read2|e1> a`.
+The type contains an effect variable `:e1`, representing the effects of the function body.
+Now, suppose we have the following user program (where head may raise an exception).
+
+
+```
+if True then f([]) else head([1])
+```
+
+As the two branches must have the same effect row,  `:<read2|e1>` and `:<exn|e2>` are unified to `:<exn,read2|e3>` or `:<read2,exn|e3>`, where `:e3` is a fresh effect variable.
+In the former case, the Koka compiler has to dynamically search for the `:read2` handler because the effect row of `f` has been changed from `:<read2|e2>` to `:<exn,read2|e3>`.
+In the latter case, the Koka compiler would dynamically search for the `:exn` handler because the effect row of `g` has been changed from `:<exn|e2>` to `:<read2,exn|e3>`.
+To avoid dynamic search, we would like to infer the type `:forall<a> a -> <read2> a` for `f`.
+We call this function type _closed_, in the sense that we cannot grow the effect row by instantiating the effect variable.
+When `f` is given this closed function type, we know that `f` only performs the `:read2` effect.
+Therefore, we can obtain a corresponding handler in constant time (see [@xie2020effect; @Xie:multip] for more details).
+In tuitively, higer order functions such as `map` must have a effect variable and need to dynamically search for the corresponding handler because the Koka compiler cannot statically determine the effects of function body at runtime. 
+The other functions such as `f` should not have a effect variable in order to generate the efficient code by evidence passing, because the set of effects of function body can be statically determined.
+
+The Hindley-Milner type inference also occasionally yields type signatures that are more general than
+what the user may expect.
+Consider the identity function.
+
+```
+fun id( x )
+  x
+```
+It is likely that the user defines `id` as a function of the following type.
+
+```
+fun id( x : a ): <> a
+  x
+```
+Notice that the effect of function body is an empty row `:<>`.
+This is because the body of `id` is variable, which has no effect.
+However, based on the Hindley-Milner inference, `id` is given type `:forall<a,e> a -> e a`.
+Here, `:e` is an effect variable representing _any_ effects.
+When the user is shown this type, they might be surprised because they did not introduce the effect variable `:e`.
+In contrast, the type `:forall<a> a -> <> a`, which has a total effect `:<>`, seems more natural.
+
+We might take other approachs to show the precise type signatures, but we believe our approach is useful for users.
+For example, we could treat all effect rows as open ones by implicitly inserting an effect variable. This approach is adopted in the Frank language; we will provide more details in Section [#sec-related-work].
+
+
+## Type Inference with $@open$ and $@close$
+
+In order to optimize more functions and display precise types, the Koka compiler manipulates effect types using special mechanisms $@open$ and $@close$.
+In this paper, we formalize type inference with these mechanisms.
+The key principle is to close the effect row of all _named_ functions 
+(bound by the `let`/`val` expression), and open the effect row when we encounter variables of a closed function type.
+Let us illustrate how $@open$ and $@close$ work through an example.
+
+```
+val id = fn(x) x 
+id( ask-int() )
+```
+
+In the type system described in this paper, the function `fn(x) x` is given the most general type `:forall<a,e> a -> e a`.
+When the function is bound to `id`, 
+the type is _closed_ to `:forall<a> a -> <> a`.
+This ensures that, when the type of a named function is displayed to the user, it must be of the closed form.
+When `id` is instantiated in the body, the type is _opened_ again, first
+to `:forall<a,e> a -> e a` and then unified to `:int -> <read2> int` so that `id( ask-int() )` is well-typed in
+its context.
+
+
+In general, $@open$ introduces a fresh effect variable `e` into a closed effect row `<l1,...,ln>`,
+yielding `<l1,...,ln|e>`.
+Dually, $@close$ removes an effect variable from an open effect row.
+Together these allow us to avoid dynamic handler search and display simplified type signatures.
+
+
+The reader may find opening and closing similar to subtyping.
+We use these mechanisms to avoid complex constraints over the subtyping relation and undecidability of the unification algorithm.
+In the following sections, we will show simple type inference for $@open$ and $@close$.
+
+# Implicitly Typed Calculus for Algebraic Effects and Handlers { #sec-implicit-calculus}
+
+
+In this section, we present $@ImpKoka$, an implicitly typed surface language that has algebraic effects and handlers, as well as polymorphism and higher-order kinds &agrave; la System F$\omega$.
+The structure of this section is as follows.
+First, we define the syntax of kinds, types, and effect rows (Sections [#sec-kinds-and-types]-[#sec-effect-row]).
+Next, we define the syntax of expressions (Section [#sec-syntax]).
+Lastly, we give a set of declarative type inference rules (Section [#sec-declarative]).
+
+Note that we do not define an operational semantics for $@ImpKoka$, but instead define a translation from $@ImpKoka$ to an extension of System F$^eff$ [@xie2020effect].
+The definition can be found in the appendix.
+
+
+
+## Syntax
+~ Begin Figure { #fig-syntax-types; caption:"Types, Kinds, Effect Signatures, and Effect Rows of $@ImpKoka$"; }
+
+~ Begin Column {width:40%; }
+|~~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~|:~~~~~~|~~~~~~~~~~~~~~~~~~~~~|~~~~~:|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| Monotypes           | $@MType$ | $\ni$ | $t$                 | ::=  | $a^k$ \| $t -> eff t$ \| $c^k t ... t$                                          |
+| Types               | $@Type$  | $\ni$ | $s$                 | ::=  | $t$ \| $\forall as^{\overline{k}}.t$                                            |
+| Kinds               | $@Kind $ | $\ni$ | $k$                 | ::=  | $*$ \| $k -> k$ \| $ke$ \| $kl$                                                 |
+| Type Constructors   | $@Con$   | $\ni$ |$c^k$                | ::=  | $<>$ \| ${<\_|\_>}$ \| $c^{@lab}$ \| $skc^k$                                    |
+| Effect Rows         | $@Eff$   | $\ni$ | $eff$               | ::=  | $<>$ \| $a^ke$ \| ${<l|eff>}$                                                   |
+| Kind Context        | $@KCtx$  | $\ni$ | $X$                 | ::=  | $\emptyset$ \| $X, a^k$                                                         |
+| Type Context        | $@TCtx$  | $\ni$ | $G, D$              | ::=  | $\emptyset$ \| $G, x: s$                                                        |
+| Substitution        | $@Subst$ | $\ni$ | $\theta$            | ::=  | $\emptyset$ \| $\theta[a^k := t]$                                               |
+| Effect signature    |          |       | $sig$               | ::=  | $\{ \overline{op_i: \forall \overline{a}_i^{\overline{k}}. t1^i -> eff t2^i} \}$|
+| Effect signatures   |          |       | $S$                 | ::=  | $\{ \overline{l_i : sig_i} \}$                                                  |
+| Syntax Convention   |          |       | $<l1,...,l_n>$      | $.=$ | ${<l1 | ... | <l_n | <>> ... >}$                                                |
+|                     |          |       | ${<l1,...,l_n|mu>}$ | $.=$ | ${<l1 | ... | <l_n | mu> ... >}$                                                |
+|                     |          | $mu$ ::= $a^ke$, &quad; $l$ ::= $c^kl$                                                                             |||
+~ End Column
+~ End Figure
+
+
+### Kinds and Types { #sec-kinds-and-types; }
+We define the syntax of kinds and types of $@ImpKoka$ in Figure [#fig-syntax-types].
+Similar to System F$^eff$ [@xie2020effect], we have kinds for value types ($*$), type constructors ($k -> k$), effect rows ($ke$), and effect labels ($@lab$).
+Differently from System F$^eff$, we distinguish between monotypes and type schemes.
+Monotypes consist of type variables $a^k$, type constructors $c^k t...t$, and function types $t -> eff t$.
+In particular, $skc^k$ is a special type constructors used in a unfication function for operations, and the detail of $skc^k$ will be explained in section [#sec-unify-alg].
+Note that type variables and constructors have a kind annotation $k$.
+The effect $eff$ in a function type $t -> eff t$ represents the effect performed by the function body.
+We will use $a$ and $b$ for value type variables and $mu$ for effect type variables, often without kind annotations.
+
+
+### Signatures
+We define operations $op$, effect signatures $sig$, and sets of effect signatures $S$ again as in System F$^eff$ (Figure [#fig-syntax-types]).
+An effect signature is a set of pairs of an operation name and a type.
+A set of effect signatures associates each effect label $l_i$ with a corresponding effect signature $sig_i$.
+We assume that operation names and effect labels are all unique, and that $S$ is defined at the top level.
+
+
+### Effect Rows { #sec-effect-row; }
+In $@ImpKoka$, we use effect rows [@Leijen:koka;@Hillerstr:Liberating] to represent a collection of effects to be performed by an expression.
+As in System F$^eff$, an effect row is either an empty row $<>$, or an effect variable $mu$, or an extension $<l | eff>$ of an effect row $eff$ with an effect label $l$, respectively.
+For example, assuming $@exn$ is an effect label representing exceptions, $<@exn, @read2>$ is an effect row representing a collection of exception and reader effects.
+The kinds of $<>$ and $l$ are $ke$ (representing an effect type) and $kl$ (representing an effect label), respectively.
+The kind of $<\_|\_>$ is $kl -> ke -> ke$.
+We will use $<>$ and $<\_|\_>$ without kind annotations.
+
+
+
+The equivalence relation for effect rows is also defined in the same way as in System F$^eff$ (Figure [#fig-row-types]).
+The $[refl]$ and $[eq-trans]$ rules are the reflexivity and transitivity rules.
+The $[eq-swap]$ rule says that two effect labels $l_1$ and $l_2$ can be swapped if they are distinct.
+The $[eq-head]$ rule tells us that two effect rows are equivalent when their heads and tails are equivalent.
+
+Note that effect rows can have multiple occurrences of the same effect label.
+For example, we may have $<@exn>$ and $<@exn, @exn>$, and they are treated as different effect rows.
+The advantage of this design is that we can define type inference rules in a simple manner, by using only type equivalence.
+
+### Expressions { #sec-syntax; }
+
+We define the syntax of expressions of $@ImpKoka$ in Figure [#fig-untyped-syntax].
+In addition to the standard lambda terms, we have let-binding $@let x = v \ @in e$, handlers $@handler h$ and operation performing $@perform op$.
+Note that we treat both $@handler h$ and $@perform op$ as a value.
+If we want to handle an expression $e$ with handler $h$, we write $@handler h (\lambda\_.e)$ via application.
+Similarly, if we want to perform an operation $op$ with argument $e$,
+we write $@perform op e$ via application.
+
+
+~ Begin Figure { #fig-row-types; caption:"Equivalence of Row Types" }
+~ Begin Columns
+~ Begin Column
+
+~ infer
+\quad
+----------------[refl]
+eff === eff
+~
+
+~ infer
+l_1 !== l2  \quad  eff_1 === eff_2
+------------------------------------[eq-swap]
+<l_1,l_2|eff_1> === <l_2,l_1|eff_2>
+~
+~ End Column
+~ Begin Column
+
+~ infer
+eff_1 === eff_2  \quad eff_2 === eff_3
+---------------------------------------[eq-trans]
+eff_1 === eff_3
+~
+
+~ infer
+eff_1 === eff_2
+------------------------[eq-head]
+<l|eff_1> === <l|eff_2>
+~
+~ End Column
+~ End Columns
+~ End Figure
+
+~ Begin Figure { #fig-untyped-syntax; caption:"Expressions of $@ImpKoka$"; }
+~ Begin Column {}
+
+|~~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~|:~~~~~~|~~~~~~~~|~~~~:|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~|
+| Expressions         | $@Exp$   | $\ni$ | $e$    | ::= | $v$                           | (value)             |
+|                     |          |       |        | \|  | $e e$                         | (application)       |
+|                     |          |       |        | \|  | $@let x = v \ @in e$          | (bind)              |
+| Values              | $@Val$   | $\ni$ | $v$    | ::= | $x$                           | (variable)          |
+|                     |          |       |        | \|  | $\lambda x. e$                | (function)          |
+|                     |          |       |        | \|  | $@handler h$                  | (effect handler)    |
+|                     |          |       |        | \|  | $@perform op$ &quad;          | (operation)         |
+| Handlers            | $@Hnd$   | $\ni$ | $h$    | ::= | $\{\overline{op_i -> v_i} \}$ | (operation clauses) |
+
+~ End Column
+~ End Figure
+
+## Declarative Type Inference Rules { #sec-declarative; }
+
+We now turn to the declarative type inference rules with $@open$ and $@close$ (Figure [#fig-decinf]).
+Here, we use a typing judgment of the form $X | G | D |- e: s | eff$.
+The judgment states that, under type variable context $X$ and typing context $G$ and $D$, expression $e$ has type $s$ and performs effect $eff$.
+Among the two contexts, $D$ is a type assignment for named (i.e., `let`-bound) functions, which inhabit a function type with a closed effect row (we will call such types _closed function types_).
+The other context $G$ is a type assignment for all other variables.
+
+The $[Var]$ and $[VarOpen]$ rules in Figure [#fig-decinf] are interesting.
+The $[Var]$ rule concludes with a type $s$ that comes from either $D$ or $G$, and an arbitrary effect $eff$.
+Note that, although a variable does not perform any effects, we cannot replace $eff$ by $<>$, because we do not have subeffecting rules in $@ImpKoka$.
+Note also that the rule applies only to variables whose type is not a closed function type.
+The $[VarOpen]$ rule derives an open function type for a variable of a closed function type.
+The variable must reside in $D$, because we can only open the type of named functions.
+As an example, we can use $[VarOpen]$ to make $id (@perform ask\mathchar`-int \ ())$ well-typed, because we can derive $X | G | D|- id: @int -> <@read2> @int$ by $[VarOpen]$ and $X | G | D |- @perform ask\mathchar`-int \ () : @int | <@read2>$ by $[Perform]$ and $[App]$.
+
+
+Other type rules in Figure [#fig-decinf] are standard. 
+The $[Lam]$ rule derives a function type for a lambda abstraction.
+Observe that the effect $eff$ of the body $e$ is integrated into the type $t1 -> eff t2$ in the conclusion.
+Note that the lambda-bound variable $x$ is added to $G$, not $D$.
+Therefore, in the derivation of the body $e$, the type of $x$ cannot be opened using $[VarOpen]$.
+The $[App]$ rule requires that the function $e1$, the argument $e2$, and the body of the function have the same effect $eff$.
+The $[Gen]$ rule derives a polymorphic type.
+Similar to the value restriction in ML we only allow values $v$ [@Wright:imppoly],
+which is necessary for soundness of the translation from $@ImpKoka$ to System F$^eff+@restrict$.
+The $[Inst]$ rule is completely standard.
+The $[Let]$ rule is used to bind values with polymorphic types.
+As in the $[Gen]$ rule, the expression being bound is a value, and must have a total effect $<>$.
+Notice that bound variable $x$ is added to the context $D$, not $G$.
+Therefore, in the derivation of the body $e2$, the type of $x$ can be opened via $[VarOpen]$.
+
+
+~ Begin Figure { #fig-decinf; caption:"Declarative Type Inference Rules"; .align-left; }
+
+~ mathpre {.typerule}
+X | G | D |- e : s | eff \qquad %
+X | G | D |= h : t | l | eff
+~
+
+~ Begin Columns
+~ Begin Column { }
+~ infer
+x : s \in G, D \quad   X |-wf eff: ke \quad{}
+s  \text{not {a} closed function type}
+-----------------------------------------------------[Var]
+X | G | D |- x : s | eff
+~
+
+~ infer
+f : \forall as^{\overline{k}} . t1 -> <l1,...,l_n> t2 \in D \quad{}
+\quad X |-wf eff: ke
+\quad X |-wf eff': ke
+----------------------------------------------------------[VarOpen]
+X | G | D |- f : \forall as^{\overline{k}}. t1 -> <l1,...,l_n | eff> t2 | eff'
+~
+~ End Column
+~ End Columns
+
+
+~ Begin Columns
+~ Begin Column
+~ infer
+X | G, x : t1 | D |- e : t2 | eff \\
+X |-wf t1: *
+\quad X |-wf eff': ke
+-----------------------------------------------------[Lam]
+X | G | D |- \lambda x. e : t1 -> eff t2 | eff'
+~
+~ End Column
+
+~ Begin Column
+~ infer
+X | G | D |- e1 : t2 -> eff t | eff \\
+X | G | D |- e2 : t2 | eff
+-------------------------------------------------------[App]
+X | G | D |- e1 e2 : t  | eff
+~
+~ End Column
+~ End Columns
+
+~ Begin Columns
+~ Begin Column
+~ infer
+X, a^k | G | D |- v : s | <> \\
+k !== kl \quad a^k \not \in @ftv(G, D)
+-------------------------------------------------[Gen]
+X | G | D |- v : \forall a^k. s | <>
+~
+~ End Column
+
+~ Begin Column
+~ infer
+X | G | D |- e : \forall a^k. s | eff
+\quad X |-wf t: k
+------------------------------------------[Inst]
+X | G | D |- e : s[a^k := t] | eff
+~
+~ End Column
+~ End Columns
+
+~ Begin Column
+~ infer
+X | G | D |- v1 : s1 | <> \quad{}
+X | G | D, x : s1 |- e2 : t2 | eff
+-------------------------------------------------------[Let]
+X | G | D |- @let x = v1 @in e2 : t2  | eff
+~
+
+~ infer
+op : \forall as^{\overline{k}}. t1 -> t2 \in S(l)
+\quad as^{\overline{k}} \not \in X \quad{}
+X |-wf ts : \overline{k}
+\quad X |-wf eff : ke
+\quad X |-ef eff' : ke
+---------------------------------------------------------------------[Perform]
+X | G | D |- @perform op : [as^{\overline{k}} := ts](t1 -> <l | eff> t2) | eff'
+~
+~ End Column
+
+~ Begin Columns
+~ Begin Column
+~ infer
+X | G | D |= h : t | l | eff
+\quad X |-wf eff' : ke
+-----------------------------------------------------------[Handler]
+X | G | D |- @handler h : (() -> <l | eff> t) -> eff t) | eff'
+~
+~ infer
+as^{\overline{k}}_i \not \in @ftv(eff, t)  \quad{}
+op_i : \forall as^{\overline{k}}_i. t1^i -> t2^i \in S(l) \quad{}
+X | G | D |- v_i : \forall as^{\overline{k}}_i. t1^i -> eff ((t2^i -> eff t) -> eff t) | <>
+---------------------------------------------------------------------------------------------[Ops]
+X | G | D |= \{op_1 -> v1, ... , op_n -> v_n \} : t | l | eff
+~
+~ End Column
+~ End Columns
+~ End Figure
+
+
+
+The $[Perform]$, $[Handler]$ and $[Ops]$ rules are also standard and used for algebraic effects and handlers.
+The $[Perform]$ rule is used to type an operation call.
+The type in the conclusion is a monotype, which is instantiated by using a sequence of types $ts$.
+The notation $op\colon\forall as^{\overline{k}}.t1 -> t2 \in S(l)$ of the premise means that the operation $op\colon\forall as^{\overline{k}}.t1 -> t2$ belongs to the effect signature corresponding to the effect label $l$.
+The $[Handler]$ rule is used to type a handler.
+It takes a thunked computation (_action_) of type $() -> <l|eff> t$ and handles the effect $l$.
+The $[Ops]$ rule takes care of operation clauses of a handler.
+The type of each operation clause is a nested function type of the form $\forall as^{\overline{k}}_i . t1^i -> eff ((t2^i -> eff t) -> eff t)$, where $t1^i$ is the input type of the operation, and $t2^i -> eff t$ is the type of the continuation.
+The condition $as^{\overline{k}}_i \not \in @ftv(eff, t)$ is necessary for type preservation of the translation from $@ImpKoka$ to System F$^eff$+$@restrict$.
+
+
+
+# Syntax-Directed Type Inference Rules { #sec-syntax-directed-inf; }
+
+
+In this section, we formalize the syntax-directed type inference rules with $@open$ and $@close$, following [@Jones:qualifiedtypes; @Leijen:hmf].
+These rules allow us to determine which typing rule to apply to an expression from the syntax.
+In what follows, we first define type substitution and type ordering, and then elaborate the key cases of the inference rules.
+
+
+~ Begin Figure { #fig-typesub-oredering; caption:"Type Substitution and Type Ordering"; .align-left; }
+
+~ mathpre {.typerule}
+|- \theta : X => X' \qquad %
+X |- s1 [= s2
+~
+
+~ Begin Columns
+~ Begin Column {  .align-center; }
+~ infer
+\quad
+--------------------------[Empty]
+|- \emptyset : \cdot{} => X
+~
+~ End Column
+
+~ Begin Column {  .align-center; }
+~ infer
+|- \theta : X1 => X2
+\quad X2 |- t : k
+-------------------------------------[Extend]
+|- \theta[a^k := t] : (X1, a^k) => X2
+~
+~ End Column
+~ End Columns
+
+~ infer
+\quad X |-wf ts : \overline{k}
+\quad t2 = [as^{\overline{k}} := ts]t1
+\quad \overline{b}^{\overline{k'}} \not \in @ftv(\forall as^{\overline{k}}. t1)
+----------------------------------------------------------[TypeOrdering]
+X |- \forall as^{\overline{k}}. t1 [= \forall \overline{b}^{\overline{k'}}. t2
+~
+~ End Figure
+
+## Type Substitution
+Figure [#fig-typesub-oredering] shows the definition of type substitution, which is inspired by [@EmrichLSCC20:FreezeML].
+The judgment $|- \theta: X_1 => X_2$ means substitution $\theta$ replaces type variables in context $X_1$ with types well-formed under context $X_2$.
+There are two formation rules for substitutions: $[Empty]$ forms an empty substitution,
+and $[Extend]$ extends a substitution $\theta$ with $[a^k := t]$.
+As a convention, we write $id$ to mean the identity substitution.
+
+
+## Type Ordering
+Figure [#fig-typesub-oredering] shows the definition of type ordering, which is similar to that of System F.
+The judgment $X |- s1 [= s2$ means type $s2$ is more specific than type $s1$ under context $X$.
+The context $X$ is used to inspect the kinds of the types $ts$ that replace the type variables $as^{\overline{k}}$.
+For example, the following relationship holds.
+
+~ mathpre
+X |- \forall a . a -> <> a [= @int -> <> @int
+X |- \forall a mu . a -> mu a [= \forall b. (b -> <@exn> b) -> <@exn> (b -> <@exn> b)
+~
+
+Using type ordering, we define type equivalence as follows.
+~ mathpre
+s1 = s2 \Leftrightarrow s1 [= s2 \land s2 [= s1
+~
+
+## Inference Rules with $@open$ and $@close$ { #sec-inf-open-close; }
+~ Begin Figure { #fig-syninf; caption:"Syntax-directed Type Inference Rules (excerpt)"; .align-left; }
+
+~ mathpre {.typerule}
+X | G | D ||-s e : t | eff \qquad %
+X | G | D |=s h : t | l | eff
+~
+
+~ Begin Columns
+~ Begin Column
+~ infer
+x : s \in G, D
+\quad X |- s [= t
+\quad X ||-wf eff: ke
+-----------------------------------------[Var]
+X | G | D ||-s x : t | eff
+~
+
+~ infer
+f : \forall as^{\overline{k}}. t1 -> <l1,...,l_n> t2 \in D \\
+\quad X |- \forall as^{\overline{k}}. t1 -> <l1,...,l_n> t2 [= t1' -> <l1,...,l_n> t2'\\
+\quad X |-wf eff: ke
+\quad X |-wf eff': ke
+----------------------------------------------------------[VarOpen]
+X | G | D ||-s f : t1' -> <l1,...,l_n|eff> t2' | eff'
+~
+
+~ infer
+X | G | D ||-s v1 : t1 | <>
+\quad X \setminus as^{\overline{k}} | G | D, x : @Close(s1) ||-s e2 : t2 | eff \\
+\quad s1 = @Gen(G, D, t1) = \forall as^{\overline{k}}. t1
+-------------------------------------------------------------------[Let]
+X | G | D ||-s @let x = v1 @in e2 : t2  | eff
+~
+
+
+~ infer
+op_i : \forall as^{\overline{k}}_i. t1^i -> t2^i \in S(l) \quad as^{\overline{k}}_i \not \in @ftv(eff, t) \quad \\
+X, as^{\overline{k}}_i  | G| D ||-s v_i : t1^i -> eff ((t2^i -> eff t) -> eff t) | <> \quad as_i^{\overline{k}} \not \in @ftv(G, D)
+---------------------------------------------------------------------------------------------[Ops]
+X | G | D |=s \{op_1 -> v1, ... , op_n -> v_n \} : t | l | eff
+~
+~ End Column
+~ End Columns
+~ End Figure
+
+Figure [#fig-syninf] is an excerpt of the syntax-directed type inference rules, consisting of those rules that are changed from the declarative rules.
+Compared to the declarative rules we saw in Section [#sec-declarative], there are no rules corresponding to $[Gen]$ and $[Inst]$, because these rules are not syntax directed.
+All other rules are identical to the declarative rules.
+Another difference is that we use two auxiliary functions $@Gen(\cdot, \cdot, \cdot)$ and $@Close(\cdot)$.
+The $@Gen$ function is the standard generalization function, with a standard definition of free type variables.
+The $@Close$ function closes the effect row of a function type.
+For example, $@Close(\forall mu a. a -> mu a) = \forall a. a -> <> a$.
+
+~ mathpre
+@Gen(G, D, t) = \forall(@ftv(t) - @ftv(G, D)). t
+
+@Close(\forall mu as^{\overline{k}}. t1 -> <l1,...,l_n | mu> t2) = \forall as^{\overline{k}}. t1 -> <l1, ... , l_n> t2 \quad &  @iff mu \not \in @ftv(t1, t2)
+@Close(s) = s  & @otherwise
+~
+
+Among the key rules, $[Var]$ is standard and derives the type instantiated by $ts$.
+The $[VarOpen]$ rule derives an open function type from a closed one by inserting an arbitrary effect row.
+The $[Let]$ rule generalizes the type of the bound expression using $@Gen$, and derives the type of the body under an extended type context $D, x: @Close(s)$.
+In the $[Ops]$ rule, we derive a monomorphic type without the type variables bound by the quantifier.
+
+
+The syntax-directed type inference rules are sound and complete with respect to the declarative type inference rules.
+
+~ Theorem { #th-soundofsyn; caption:"syntax-directed inference rules is sound"}
+If $X | G | D ||-s e : t | eff$ then $X | G | D |- e : t | eff$.
+~
+
+~ Theorem { #th-compofsyn; caption:"syntax-directed inference rules is complete"}
+If $X | G | D |- e : s | eff$ then $X' | G | D ||-s e : t | eff$,  
+where $X \subseteq X'$ and $X' |- @Gen(G, D, t) [= s$.
+~
+
+## Principles on the Use of $[Let]$ Rule
+
+It is important that the $@Close$ function is applied only in the $[Let]$ rule.
+The reason is that, if $@Close$ is used to close a function type that is not universally quantified, the type system cannot track the effects to be handled.
+Let us illustrate the problem using a variation of $@Close$ and $[Lam]$ rule.
+We first define $@Close1$ as a function that closes the effect variable of a monomorphic function type.
+For example, $@Close1(a -> mu a) = a -> <> a$, where $G = \emptyset$ and $D = \emptyset$.
+
+~ mathpre
+@Close1(t1 -> <l1,...,l_n | mu> t2) = t1 -> <l1, ... , l_n> t2 \quad & @iff mu \not \in @ftv(t1, t2)
+@Close1(t) = t & @otherwise
+~
+
+We next define $[Lam1]$ as a typing rule that closes the monomorphic function type of a lambda-bound variable using $@Close1$ and derives the type of the body under an extended type context $D, x: t1'$.
+This allows more functions to have a closed function type as their domain.
+
+~ infer
+X | G | D, \gray{x : t1'}  ||-s e : t2 | eff \quad \gray{ t1' = @Close1(t1) } \\
+X |-wf t1: *
+\quad X |-wf eff': ke
+---------------------------------------------------[Lam1]
+X | G | D ||-s \lambda x. e : t1 -> eff t2 | eff'
+~
+
+With $[Lam1]$, it is possible to derive wrong effects.
+Consider the following expression.
+
+~ mathpre
+@let f =  \lambda g.\ g\ () @in \ f\ (\lambda \_. @perform ask\mathchar`-int \ ())
+~
+
+First, we derive $\emptyset | \emptyset | \emptyset ||-s \lambda g.\ g\ (): (() -> mu a) -> <> a$ by the $[Lam1]$ and $[VarOpen]$ rules.
+Next, we extend the type context $D$ with $f: \forall mu a. (() -> mu a) -> <> a$ by the $[Let]$ rule.
+Then, we obtain the following derivation by the $[App]$ rule.
+
+~ mathpre
+\emptyset | \emptyset | f: \forall mu a. (() -> mu a) -> <> a ||-s f\ (\lambda \_. @perform ask\mathchar`-int \ ()) : @int | <>
+~
+
+This typing judgment is clearly wrong, because it does not track the $@read2$ effect.
+The problem can be avoided if we use $@Close$ only in the $[Let]$ rule: in that case, $f$ will be given a correct type $\forall mu. a (() -> mu a) -> mu a$.
+
+
+## Fragility of $[Let]$ Rule
+
+An unfortunate aspect of our current rules is that the $[Let]$ rule
+is fragile in the sense that insertion of a let-binding may change the typability of programs.
+Let us consider the following functions:
+~ mathpre
+remote &= \lambda f. \ @perform ask\mathchar`-bool \ ()
+foo    &= \lambda f. \ remote \ f; f \ ()
+~
+In our type system, the type of the function $remote$ is inferred as $a -> <@read2|mu> @bool$.
+The function $foo$ is also well-typed.
+First, the lambda-bound variable $f$ is added to the context $G$,
+second, the type of $remote \ f$ is inferred as $X | G | D ||-s remote \ f: @bool$
+$| <@read2|mu>$ by the $[App]$ rule,
+and finally, the type of $f$ is inferred as $X | G | D ||-s f:$ 
+$() -> <@read2|mu> b | <@read2|mu>$ by the $[App]$ rule, where $e1;e2$ is a syntax sugar of $(\lambda \_. \ e2) \ e1$.
+Therefore, the type of function $foo$ is inferred as $(() -> <@read2|mu> b)$ 
+$-> <@read2|mu> b$ and $foo$ is judged well-typed.
+
+Suppose though that we have a function $remote$ that is 
+explicitly annotated with type $(() -> <> ()) -> <@read2> @bool$.
+~~ mathpre
+remote : (() -> <> ()) -> <@read2> @bool
+remote = \lambda f. \ @perform ask\mathchar`-bool \ ()
+
+foo = \lambda f. \ remote \ f; f \ ()
+bar = \lambda f. \ remote \ f; @let g = f  @in g \ ()
+~~
+
+
+
+Here $foo$ and $bar$ only differ in the explicit let-binding for $f$.
+The naive Hindley-Milner type inference without open and close mechanisms rejects both $foo$ and $bar$, 
+because a closed function type cannot be opened.
+In contranst, our inference rules reject $foo$ but accept $bar$.
+The type of $remote \ f$ is inferred as $X | G | D ||-s remote \ f :$ 
+$@bool | <@read2>$, and the type of $f$ is unified to a closed type $() -> <> ()$ by $remote$.
+Its type cannot be opened to $() -> <@read2> ()$, because the lambda-variable $f$ is included in $G$ and cannot be applied the $[VarOpen]$ rule.
+Hence, we cannot apply the $[App]$ rule to $f \ ()$.
+On the other hand, the $bar$ definition is well-typed.
+The function $f$ is now a `let`-bound variable, thus its type can be opened to $() -> <@read2> ()$ by the $[VarOpen]$ rule.
+Hence, we can apply the $[App]$ rule to $g \ ()$.
+
+This is clearly not desirable and we would like to address this in future work. 
+On the other hand, it is not uncommon to find this form of fragility in practical type systems (like the monomorphism restriction in Haskell, inference for GADT's [@PeytonJones:wobbly], etc) and it may work out fine in practice. Experiments on all the standard libraries of Koka (~15000 lines) showed only 2 instances where a let binding was required.
+
+
+
+# Type Inference Algorithm { #sec-type-infer; }
+
+
+In this section, we formalize the type inference algorithm with $@open$ and $@close$ as an extension of Algorithm W [@Damas:principal].
+We first define auxiliary functions (Section [#sec-aux-funcs]), and then 
+discuss the unification algorithm (Section [#sec-unify-alg])
+and the type inference algorithm (Section [#sec-infer-alg]).
+
+## Auxiliary Functions { #sec-aux-funcs; }
+~ Begin Figure { #fig-aux-funcs; caption:"Auxiliary Functions"; .align-left; }
+~ Begin Columns
+~ Begin Column { .align-top; }
+~ mathpre
+@dom : @Subst -> @TypeVars
+@dom(\emptyset) = \emptyset
+@dom(\theta[a^k := t]) = \{ a^k \} \cup @dom(\theta)
+
+@codom : @Subst -> @MTypes
+@codom(\emptyset) = \emptyset
+@codom(\theta[a^k := t]) = \{ t \} \cup @dom(\theta)
+
+(-) : (@Subst, @TypeVars) -> @Subst
+\emptyset - as^{\overline{k}} = \emptyset
+\theta[b^k := t] - as^{\overline{k}} = \theta - as^{\overline{k}}               & (b^k \in as^{\overline{k}})
+\theta[b^k := t] - as^{\overline{k}} = (\theta - as^{\overline{k}}) [b^k := t]  & (b^k \not \in as^{\overline{k}})
+~
+~ End Column
+
+~ Begin Column { .align-top; }
+~ mathpre
+@const : @MTypes -> @Cons
+@const(\emptyset) = \emptyset
+@const(\{ skc^k \} \cup ts) = \{ skc^k \} \cup @const(ts)
+@const(\{ t \} \cup ts) = @const(ts)
+
+@tail : @Eff -> @Eff
+@tail(<l | eff>) = eff
+
+
+
+
+
+
+
+~
+~ End Column
+~ End Columns 
+~ End Figure
+
+In Figure [#fig-aux-funcs], we define auxiliary functions.
+The functions $@dom( \cdot )$, $@codom( \cdot) $, and $@tail( \cdot )$ are completely standard.
+The $@dom$ function takes a substitution $\theta$ and returns a set of type variables that are included in the domain of $\theta$.
+The $@codom$ function also takes a substitution $\theta$ and returns a set of monomorphic types that are included in the codomain of $\theta$.
+The $@tail$ function takes an effect row and returns the tail of the effect row.
+Note that the function is defined only on non-empty effect rows.
+The $(-)$ and $@const$ functions are used in the $unifyOp$ function (Section [#sec-unify-alg]).
+The former takes a substitution $\theta$ and set of type variables $as^{\overline{k}}$, and returns a new substitution with $as^{\overline{k}}$ removed from the domain of $\theta$.
+The latter takes a set of monomorphic types, and returns a set of skolem constants.
+
+
+## Unification Algorithm { #sec-unify-alg; }
+~ Begin Figure { #fig-unify; caption:"Unification Algorithm"; .align-left; }
+
+~ Begin Column { .align-top; }
+~ mathpre
+unify : (@KCtx \times @MType \times @MType) -> (@KCtx \times @Subst)
+unify(X,a^k,a^k) = @return (X, id)
+unify((X,a^k),a^k, t) = 
+          @assert X |-wf t: k
+          @return (X, id[a^k := t])
+unify((X,a^k),t,a^k)  = 
+          @assert X |-wf t: k
+          @return (X, id[a^k := t])
+unify(X,<>,<>)  = @return (X, id)
+unify(X, <l | eff1>, <l' | eff2>) =
+          \text{let} (X1, \theta_1, eff3) = unifyEffect(X, <l' | eff2>, l)
+          @assert @tail(eff1) \not \in @dom(\theta_1)
+          \text{let} (X2, \theta_2) = unify(X1, \theta_1(eff1), eff3)
+          @return (X2, \theta_2 \circ \theta_1)
+unify(X, t1 -> eff t2, t1' -> eff' t2') =
+          \text{let} (X_1, \theta_1) = unify(X, t1, t1')
+          \text{let} (X_2, \theta_2) = unify(X_1, \theta_1(eff), \theta_1(eff'))
+          \text{let} (X_3, \theta_3) = unify(X_2, (\theta_2 \circ \theta_1)(t2'), (\theta_2 \circ \theta_1)(t2'))
+          @return (X_3, \theta_3 \circ \theta_2 \circ \theta_1)
+
+unifyEffect : (@KCtx \times @Eff \times @Lab) -> (@KCtx \times @Subst \times @Eff)
+unifyEffect(X, <l' | eff>, l) =
+      | l' === l   => @return (X, id, eff)
+      | l' !== l   => \text{let} (X1, \theta_1, eff1) = unifyEffect(X, eff, l)
+                  @return (X1, \theta_1, <l' | eff1>)
+unifyEffect((X, mu), mu, l) =
+      @assume mu_1 \text{is fresh}
+      @return ((X, mu_1), id[mu := <l | mu_1>]), mu_1)
+
+unifyOp : (@KCtx \times @Type \times @MType) -> (@KCtx \times @Subst)
+unifyOp(X, \forall as^{\overline{k}}. t1, t2) =
+      @assume \overline{skc}^{\overline{k}} \text{are fresh (skolem constants)}
+      \text{let} (X1, \theta_1) = unify(X, id[as^{\overline{k}} := \overline{skc}^{\overline{k}}]t1, t2)
+      @assert \overline{skc}^{\overline{k}} \not \in @const(@codom(\theta_1 - @ftv(t2)))
+      @return ((X1, as^{\overline{k}}), [\overline{skc^k \mapsto a^k}] \circ \theta_1)
+~
+~ End Column
+~ End Figure
+
+In Figure [#fig-unify], we define the unification algorithm.
+The algorithm is a natural extension of the standard Robinson unification algorithm [@Robinson:machine].
+It consists of three functions $unify(\cdot,\cdot,\cdot)$, $unifyEffect(\cdot,\cdot,\cdot)$, and $unifyOp(\cdot,\cdot,\cdot)$,
+which take care of value types, effect types, and the type of operation clauses, respectively.
+Among these functions, $unify$ and $unifyEffect$ are standard.
+The $unifyOp$ function originates from the special treatment of Koka's operation clauses.
+
+
+Let us look at the $unify$ and $unifyEffect$ functions.
+Given a triple ($X$, $eff$, $l$) of a type context, an effect row type, and an effect label, $unifyEffect$ returns a triple ($X1$, $\theta_1$, $eff_1$) of a new type context, a substitution, and an effect row.
+We can transfom $eff$ into an effect row whose head effect label is $l$.
+As an example, let us consider the following unification problem.
+
+~ mathpre
+unifyEffect(X, <@read2 | mu>, @exn)
+~
+
+This succeeds and returns the following effect row and substitution:
+
+~ mathpre
+eff_1 = <@read2 | mu_1> \quad{} \theta_1 = id[mu := <@exn | mu_1>]
+~
+
+The $unifyEffect$ function is sound.
+That is, if $unifyEffect(X, eff, l)$ succeeds, it returns a substitution $\theta_1$ and an effect row $eff_1$ that satisfy $\theta_1(eff) === <l|\theta_1(eff_1)>$.
+
+~ Theorem { #th-soundofunnifyEff; caption:"unifyEffect is sound"}
+If $X |-wf eff: ke$, $X |-wf l: kl$ and $unifyEffect(X, eff, l) = (X_1, \theta_1, eff_1)$,  
+then $|- \theta_1 :  X => X_1$ and $\theta_1(eff) === <l | \theta_1(eff_1)>$.
+~
+
+The $unifyEffect$ function is also complete.
+That is, if $eff$ can be rewritten to an effect row of the form $<l|\theta(eff')>$ by the substitution $\theta$, $unifyEffect(X, eff, l)$ succeeds and returns the most general substitution $\theta_1$.
+
+~ Theorem { #th-compofunifyeff; caption:"unifyEffect is complete"}
+If $X |-wf eff: ke$, $X |-wf l: kl$, $|- \theta : X => X_2$ and $\theta(eff) === <l | \theta(eff')>$,  
+then $unifyEffect(X, eff, l) = (X_1, \theta_1, eff_1)$ and there exists $|- \theta_2: X_1 => X_2$ such that $\theta = \theta_2 \circ \theta_1$.
+~
+
+The $unify$ function is similar to $unifyEffect$.
+Given a triple $(X, t1, t2)$ of a type context and two monomorphic types, $unify$ returns a pair ($X1$, $\theta_1$) of a new type context and a substitution.
+The most interesting case of the unifcation algorithm is $unify(X, <l | eff1>, <l' | eff2>)$ that corresponds to $[uni-row]$ case in the [@Leijen:scopedlabels].
+First, $unifyEffect(X, <l'|eff2>, l)$ in the first line returns a substitution $\theta_1$ and an effect row $eff3$, where $<l | eff3> === \theta_1(<l' | eff2>)$.
+Next, $@tail(eff1) \not \in @dom(\theta_1)$ in the second line confirms that effect variable of $eff1$ is not included in the domain of $\theta_1$.
+This is needed to ensure the termination of the unification algorithm.
+Then, $unify(X1, \theta_1(eff1), eff3)$ in the third line returns a substitution $\theta_2$, where $\theta_2(eff3) === (\theta_2 \circ \theta_1)(eff1)$.
+Thus, we obtain the following equation.
+
+~ mathpre
+(\theta_2 \circ \theta_1)(<l | eff1>) === (\theta_2)(<l | eff3>) === (\theta_2 \circ \theta_1)(<l' | eff2>)
+~
+
+The unification algorithm is sound: if $unify(X, t1, t2)$ succeeds, it returns the substitution $\theta_1$ that unifies $t1$ and $t2$.
+
+~ Theorem { #th-soundofunify; caption:"unify is sound"}
+If $X |-wf t1 : k$, $X |-wf t2: k$, and $unify(X, t1, t2) = (X_1, \theta_1)$,
+then $|- \theta_1 : X => X1$ and $\theta_1(t1) = \theta_1(t2)$.
+~
+
+The unification algorithm is also complete: if two types $t1$ and $t2$ are unifiable, $unify(X, t1, t2)$ succeeds and it returns the most general substitution $\theta_1$.
+
+~ Theorem { #th-compofunify; caption:"unify is complete"}
+If $X |-wf t1 : k$, $X |-wf t2: k$, $|- \theta : X => X2$ and $\theta(t1) = \theta(t2)$,  
+then $unify(X, t1, t2) = (X_1, \theta_1)$
+and there exists $|- \theta_2 : X1 => X2$ such that $\theta = \theta_2 \circ \theta_1$.
+~
+
+
+We now look at the $unifyOp$ function.
+The function takes a triple ($X$, $\forall as^{\overline{k}}. t1$, $t2$) of a type variable context, a type scheme, and a monomorphic type $t$, and returns a pair ($X1$, $\theta_1$) of a new type context and a substitution.
+Following [@Leijen:hmf], we use _skolem constants_ to ensure that bound type variables $as^{\overline{k}}$ do not escape or occur free in the substitution $[\overline{skc^k \mapsto a^k}] \circ \theta_1$.
+The algorithm reads as follows.
+We first replace the free type variables $as^{\overline{k}}$ of $t1$ with fresh skolem constants $\overline{skc}^{\overline{k}}$, and unify the resulting type with $t2$.
+When we obtain a substitution $\theta_1$ as the result, we check the codomain of $\theta_1 - @ftv(t_2)$ does not contain skolem constants $\overline{skc}^{\overline{k}}$, using the $@const$ function.
+If this checking succeeds, we construct a new substitution by replacing the skolem constants $\overline{skc}^{\overline{k}}$ in $\theta_1$ back to type variables $as^{\overline{k}}$, and return the resulting substitution.
+As an example, consider the following unification problem:
+
+~ mathpre
+unifyOp(X, \forall a. a -> @exn ((a -> <@exn> @int) -> <@exn> @int), b_1 -> mu b_2)
+~
+
+This succeeds and returns the following substitution:
+
+~mathpre
+[skc \mapsto a] \circ \theta_1 = id[b_1 := a, b_2 := ((a -> <@exn> @int) -> <@exn> @int), mu := <@exn>]
+~
+
+where $\theta_1 = id[b_1 := skc, b_2 := ((skc -> <@exn> int) -> <@exn> int), mu := <@exn>]$.
+
+The soundness and completeness of $unifyOp$ can be proven in a similar way to that of $unify$ and $unifyEffect$.
+
+~ Theorem { #th-soundofunfyop; caption:"unifyOp is sound"}
+If $X |-wf \forall as^{\overline{k}}. t1 : k$, $X |-wf t2: k$ and $unifyOp(X, \forall as^{\overline{k}}. t1, t2) = (X_1, \theta_1)$,  
+then $|- \theta_1 : X => X1$ and $\theta_1(\forall as^{\overline{k}}. t1) = \forall as^{\overline{k}}. \theta_1(t2)$.
+~
+
+~ Theorem { #th-compofunfyop; caption:"unifyOp is complete"}
+If $X |-wf \forall as^{\overline{k}}. t1 : k$, $X |-wf t2: k$, $|- \theta : X => X2$ and $\theta(\forall as^{\overline{k}}. t1) = \forall as^{\overline{k}}. \theta(t2)$,  
+then $unifyOp(X, \forall as^{\overline{k}}. t1, t2) = (X_1, \theta_1)$
+and there exists $|- \theta_2 : X1 => X2$ such that $\theta = \theta_2 \circ \theta_1$.
+~
+
+
+
+## Type Inference Algorithm { #sec-infer-alg; }
+~ Begin Figure { #fig-infer; caption:"Type Inference Algorithm"; .align-left; }
+~ mathpre
+infer : (@KCtx \times @TCtx \times @TCtx \times @Exp) -> (@KCtx \times @Subst \times @MType \times @Eff)
+infer(X, G, D, x) =
+    | x: \forall as^{\overline{k}}. t1 -> <l1,..,l_n> t2 \in D
+        =>  @assume \overline{b}^{\overline{k}}, mu_1 \text{and} mu_2 \text{are fresh}.
+            @return ((X, \overline{b}^{\overline{k}}, mu_1, mu_2), id, id[as^{\overline{k}} := \overline{b}^{\overline{k}}](t1 -> <l1,..,l_n|mu_1> t2), mu_2)
+    | x: \forall as^{\overline{k}}. t \in G, D
+        =>  @assume \overline{b}^{\overline{k}} \text{and} mu \text{are fresh}.
+            @return ((X, \overline{b}^{\overline{k}}, mu), id, id[as^{\overline{k}} := \overline{b}^{\overline{k}}]t, mu)
+
+infer(X, G, D, \lambda x. e) =
+    @assume a^{\ast} \text{and} mu \text{are fresh}.
+    \text{let} (X1, \theta_1, t1, eff1) = infer((X, a^{\ast}), (G, x: a^{\ast}), D, e)
+    @return (X1, \theta_1, \theta_1(a^{\ast}) -> eff1 t1, mu)
+
+infer(X, G, D, e1 e2) =
+    @assume a^{\ast} \text{is fresh}.
+    \text{let} (X1, \theta_1, t1, eff1) = infer(X, G, D, e1)
+    \text{let} (X2, \theta_2, t2, eff2) = infer(X1, \theta_1(G), \theta_1(D), e2)
+    \text{let} (X3, \theta_3) = unify(X2, \theta_2(t1), t2 -> eff2 a^{\ast})
+    \text{let} (X4, \theta_4) = unify(X3, (\theta_3 \circ \theta_2)(eff1), \theta_3(eff2))
+    @return (X4, \theta_4 \circ \theta_3 \circ \theta_2 \circ \theta_1, (\theta_4 \circ \theta_3)(a^{\ast}), (\theta_4 \circ \theta_3)(eff2))
+
+infer(X, G, D, @let x = v1 @in e2) =
+    \text{let} (X1, \theta_1, t1, eff1) = infer(X, G, D, v1)
+    \text{let} (X2, \theta_2) = unify(X1, eff1, <>)
+    \text{let} \forall as^{\overline{k}}. \theta_2(t1) = @Gen((\theta_2 \circ \theta_1)(G), (\theta_2 \circ \theta_1)(D), \theta_2(t1))
+    \text{let} s = @Close(\forall as^{\overline{k}}. \theta_2(t1))
+    \text{let} (X3, \theta_3, t2, eff2) = infer(X2\setminus as^{\overline{k}}, (\theta_2 \circ \theta_1)(G), ((\theta_2 \circ \theta_1)(D), x: s), e2)
+    @return (X3, (\theta_3 \circ \theta_2 \circ \theta_1), t2, eff2)
+
+infer(X, G, D, @perform op) =
+    @assume \overline{b}^{\overline{k}}, mu_1 \text{and} mu_2 \text{are fresh}.
+    \text{let} \forall as^{\overline{k}}. t1 -> t2 = @Op(S, op)
+    @return ((X, \overline{b}^{\overline{k}}, mu_1, mu_2), id, [as^{\overline{k}} := \overline{b}^{\overline{k}}](t1 -> mu_1 t2), mu_2)
+
+infer(X, G, D, @handler h) =
+    @assume mu \text{is fresh}.
+    \text{let} (X1, \theta_1, t1, l1, eff1) = inferHandler(X, G, D, h)
+    @return ((X, mu), \theta_1, (() -> <l1|eff1> t1) -> eff1 t1, mu)
+~
+~ End Figure
+
+
+
+In Figures [#fig-infer] and [#fig-inferhandler], we define the type inference algorithm.
+The algorithm is an extension of Algorithm W [@Damas:principal] with kinding and a row-based effect system.
+The functions $infer(\cdot, \cdot, \cdot, \cdot)$ and $inferHandler(\cdot, \cdot, \cdot, \cdot)$ are defined by mutual induction.
+Given a quadruple $(X, G, D, e)$ of a type variable context, two typing contexts, and an expression, $infer$ returns a quadruple $(X, \theta, t, eff)$ of a new type variable context, a substitution, a monomorphic type, and an effect row.
+The effect row $eff$ represents the effect performed by the expression $e$.
+
+Let us go through individual cases.
+In the variable case, if $x$ has a closed function type and resides in $D$, $infer$ yields the most general type by opening the closed effect row to $mu_1$.
+The $infer$ function also yields an arbitrary effect $mu_2$ as $x$ is a value.
+If $x$ does not have a closed function type, $infer$ generates a new type variable $\overline{b}^{\overline{k}}$ as in a standard type inference algorithm.
+
+The abstraction and application cases are standard, except that they involve inference of effect rows.
+
+In the case of a let-expression, the bound expression is generalized by $@Gen$ and the effect row of the function type is closed by $@Close$.
+Then, the type context $D$ is extended with the closed effect row and used for the inference of the body of the let-expression.
+Consider the inference of the following let-expression.
+
+~ mathpre
+@let f = \lambda x. x \ @in f \ 1
+~
+
+The type of $f$ is inferred to be $\forall a mu. a -> mu a$, where $mu$ is an effect variable.
+Since the effect row of the function is closed immediately after generalization, the inference of the body $f \ 1$ is done by $infer(X, G, (D, f: \forall a. a -> <> a) , f \ 1)$.
+
+In the case of an operation call, $infer$ simply returns the type instantiated with a new effect variable.
+Here, $@Op(\cdot, \cdot)$ is an auxiliary function that selects from $S$ the signature of the operation $op$.
+
+
+~ Begin Figure { #fig-inferhandler; caption:"Type Inference Algorithm for Handlers"; .align-left; }
+~ mathpre
+inferHandler : (@KCtx \times @TCtx \times @TCtx \times  @Hnd) -> (@KCtx \times @Subst \times @MType \times @Lab \times @Eff)
+inferHandler(X, G, D, \{op_1 -> v1, ... , op_n -> v_n \}) =
+    @assume b^{\ast} \text{and} mu \text{are fresh}.
+    \text{let} l = @Label(S, op1)
+    @assert S(l) = \{op1,...,op_n\}
+    \text{let} (X0, \theta_0) = (X, id)
+    \text{for} i \in \{1,...,n\}
+      @assume as^{\overline{k}}_i \text{are fresh}.
+      \text{let} \forall as_i^{\overline{k}}. t1^i -> t2^i = @Op(S, op_i)
+      \text{let} (X_i^1, \theta_i^1, t_i, eff_i) = infer(X_{i-1}^3, \theta_{i-1}(G), \theta_{i-1}(D), v_i)
+      \text{let} (X_i^2, \theta_i^2) = unify(X_i^1, eff_i, <>)
+      \text{let} (X_i^3, \theta_i^3)
+        = unifyOp(X_i^2, (\theta_i^2 \circ \theta_i^1 \circ \theta_{i-1})(\forall as^{\overline{k}}. t_i^1 -> mu ((t_i^2 -> mu b^\ast) -> mu b^\ast)), \theta_i^2(t_i))
+      \text{let} \theta_i = \theta_i^3 \circ \theta_i^2 \circ \theta_i^1 \circ \theta_{i-1}
+      @assert  as_i^{\overline{k}} \not \in @ftv(\theta_i(G), \theta_i(D))
+    @return (X_n^3, \theta_n, \theta_n(b^{\ast}), l, \theta_n(mu))
+~
+~ End Figure
+
+
+In the handler case, we use two auxiliary functions $inferHandler$ and $@Label$.
+The $inferHandler$ function infers the type of a handler. It receives a quadruple $(X, G, D, h)$ of a type variable context, two typing contexts, and a handler, and returns a quintuple $(X, \theta, t, l, eff)$ of a new type variable context, a substitution, a monomorphic type, an effect label, and an effect row.
+Here, $t$ is the return type of the continuation captured by the handler $h$, $l$ is the effect label handled by $h$, and $eff$ is the rest of the effect row.
+The $@Label$ function returns the effect label corresponding to the given operation.
+
+
+It is important to use $unifyOp$ instead of $unify$ in the type inference of handlers.
+For example, consider the following effect signature and handler:
+~~ mathpre
+S = \{ l_1: \{ op: \forall a. a -> a \}\}
+@handler \{ op -> \lambda x \ k.\ k (x + 1) \}
+~~
+This handler should be rejected for the following reason.
+First, the operation $op$ is defined as having type $\forall a. a -> a$.
+Therefore, the operation clause of $op$ must have a type of the form $\forall a. a -> mu ((a -> mu b) -> mu b)$, where the input and output types of the operation are universally quantified.
+Second, the operation clause $\lambda x k. k (x + 1)$ is inferred to have type $@int -> mu ((@int -> mu b) -> mu b)$, where the input and output types are a concrete type $@int$.
+If we use $unifyOp$, unification of $\forall a. a -> mu ((a -> mu b) -> mu b$ and $@int -> mu ((@int -> mu b) -> mu b)$ fails, because the bound variable $a$ and $@int$ cannot be unified.
+On the other hand, if we use $unify$, unification of the two types succeeds, because we would pass a monomorphic type $a -> mu ((a -> mu b) -> mu b)$ to $unify$, which can be unified with $@int -> mu ((@int -> mu b) -> mu b)$.
+
+
+The soundness and completeness with respect to the syntax-directed inference rules of $infer$ can be proven by induction on the structure of $e$.
+
+~ Theorem { #th-soundofinfer; caption:"infer is sound with respect to syntax-directed inference rules"}
+If $infer(X, G, D, e) = (X1, \theta, t, eff)$,
+then $|- \theta : X => X1$ and $X1 | \theta(G) | \theta(D) ||-s e : t | eff$.
+~
+
+
+~ Theorem { #th-compofinfer; caption:"infer is complete with respect to syntax-directed inference rules"}
+If $|- \theta : X => X2$ and $X2 | \theta(G) | \theta(D) ||-s e : t | eff$,  
+then $infer(X, G, D, e) = (X1, \theta_1, t, eff)$, and there exists $|- \theta_2 : X1 => X2$ such that $\theta = \theta_2 \circ \theta_1$.
+~
+
+Using the results so far, we can prove the main theorems: the type inference algorithm for the declarative inference rules is sound and complete.
+
+
+~ Theorem { #th-sound; caption:"infer is sound"}
+If $infer(X, G, D, e) = (X1, \theta, t, eff)$,
+then $|- \theta : X => X1$ and $X1 | \theta(G) | \theta(D) |- e : t | eff$.
+~
+
+~ proof
+By Theorem [#th-soundofsyn] and Theorem [#th-soundofinfer].
+~
+
+~ Theorem { #th-comp; caption:"infer is complete"}
+If $|- \theta : X => X2$ and $X2 | \theta(G) | \theta(D) |- e : t | eff$,  
+then $infer(X, G, D, e) = (X1, \theta_1, t, eff)$, and there exists $|- \theta_2 : X1 => X2$ such that $\theta = \theta_2 \circ \theta_1$.
+~
+
+~ proof
+By Theorem [#th-compofsyn] and Theorem [#th-compofinfer].
+~
+
+# Related Work { #sec-related-work; }
+There are a variety of languages supporting effect handlers in the literature.
+Eff [@Bauer:programming] is an ML-like language that employs the Hindley-Milner type inference [@Pretnar:Inferring; @Karachalias:Explicit].
+Differently from Koka, Eff has an effect system based on subtyping.
+As a result, the type inference algorithm [@Karachalias:Explicit] of Eff is more complex than the one presented in this paper.
+
+
+Frank [@Lindley:Frank; @Lindley:frankly] is a language that has effect rows and effect polymorphism similar to Koka.
+The difference is that Frank treats all effect rows as open ones by implicitly inserting effect variables.
+This means the user does not need to write type variables to express effect polymorphism, but it also means error messages may contain effect variables that the user did not write.
+Moreover, this approach to treating effect rows is not suitable for evidence passing because it gives rise to unnecessary search for handlers.
+
+Links [@Hillerstr:Liberating] is another language with a row-based effect system and effect polymorphism.
+What is different from Koka is that effect rows in Links are based on Remy's record types [@Remy:records], where each effect label is annotated with a presence type.
+Presence types increase the expressiveness of the language, but they also complicate the inference algorithm.
+
+There is a type inference algorithm for an older version of Koka [@Leijen:koka], which solely supports built-in effects such as exceptions and references.
+Similar to the current Koka, it has effect rows [@Leijen:scopedlabels] and effect polymorphism.
+The type inference algorithm is an extension of the Hindley-Milner algorithm, but it infers an open effect row for all functions due to the lack of $@open$ and $@close$.
+
+# Conclusion and Future Work { #sec-conclusion; }
+In this paper, we formalized a type inference algorithm with $@open$ and $@close$ and proved its soundness and completeness.
+The inference algorithm helps the Koka compiler statically determines handlers, and thus improves performance.
+Moreover, it allows the compiler to display precise signatures.
+
+In future work, we plan to improve the current typing rules in order to make the typability of programs robust against small syntactic rewrites.
+One possible approach is to add the `open` keyword to avoid implicit opening of closed function types.
+This construct is similar to $\lceil \cdot \rceil$ in [@EmrichLSCC20:FreezeML] that avoids implicitly instantiating variables.
+However, this choice gives a gap between the formalization and implmentation of Koka, because the current Koka implicitly opens closed functions types.
+
+### Acknowledgement { - }
+We would like to thank the anonymous reviwers for thier valuable comments 
+and the members of Masuhara laboratory for helpful advice.
+We are particularly grateful to Naoya Furudono for useful suggestions and discussions.
+This work was supported in part by JSPS KAKENHI under Grant No.\ JP19K24339.
+
+
+
+~ Begin Extended
+
+
+
+~ TexRaw
+\appendix
+~
+
+# Appendix { - }
+
+~ Begin Figure { #fig-type-trans; caption:"Translation to System F$^eff$+$@restrict$"; .align-left; }
+
+~ mathpre {.typerule}
+\inh{X} | \inh{G} | \inh{D} |- \inh{e} : \inh{s} | \inh{eff} ~> \syn{e'} \qquad %
+\inh{X} | \inh{G} | \inh{D} |= \inh{h} : \inh{t} | \inh{l} | \inh{eff} ~> \syn{h'}
+~
+
+~ Begin Columns
+~ Begin Column { }
+~ infer
+x : s \in G, D \quad   X |-wf eff: ke \quad \\
+s  \textrm{not {a} closed function type}
+-----------------------------------------------------[Var]
+X | G | D |- x : s | eff ~> x
+~
+~ End Column
+
+
+~ Begin Column
+~ infer
+f : \forall as^{\overline{k}}. t1 -> <l1,...,l_n> t2 \in D \\
+\quad X |-wf eff: ke
+\quad X |-wf eff': ke
+----------------------------------------------------------[VarOpen]
+X | G | D |- f : \forall as^{\overline{k}}. t1 -> <l1,...,l_n | eff> t2 | eff' \\
+\quad ~> \Lambda as^{\overline{k}}. \lambda^{<l1,...,l_n|eff>} x: t1. @restrict^{<l1,...,l_n>} f [as^{\overline{k}}] x
+~
+~ End Column
+~ End Columns
+
+
+~ Begin Column
+~ infer
+X | G, x : t1 | D |- e : t2 | eff ~> e'
+\quad X |-wf t1: *
+\quad X |-wf eff': ke
+-----------------------------------------------------[Lam]
+X | G | D |- \lambda x. e : t1 -> eff t2 | eff' ~> \lambda^eff x: t1. e'
+~
+
+~ infer
+X | G | D |- e1 : t2 -> eff t | eff  ~> e1'
+\quad X | G | D |- e2 : t2 | eff ~> e2'
+-------------------------------------------------------[App]
+X | G | D |- e1 e2 : t  | eff ~> e1' e2'
+~
+
+~ infer
+X, a^k | G | D |- v : s | <> ~> v'
+\quad k !== kl
+-------------------------------------------------------[Gen]
+X |G | D |- v : \forall a^k. s | <> ~> \Lambda a^k. v'
+~
+
+~ infer
+X | G | D |- e : \forall a^k. s | eff ~> e'
+\quad X |-wf t: k
+---------------------------------------------[Inst]
+X | G | D |- e : s[a^k := t] | eff ~> e'[t]
+~
+~ End Column
+
+
+~ infer
+X | G | D |- v1 : s1 | <>  ~> v1'
+\quad X | G | D, x : s1 |- e2 : t2 | eff ~> e2'
+----------------------------------------------------------------------[Let]
+X | G | D |- @let x = v1 @in e2 : s2  | eff ~> (\lambda^{eff} x: s1. e2') v1'
+~
+~ Begin Column
+~ infer
+op : \forall as^{\overline{k}}. t1 -> t2 \in S(l)
+\quad as^{\overline{k}} \not \in X
+\quad X |-wf ts : \overline{k}
+\quad X |-wf eff' : ke
+---------------------------------------------------------------------[Perform]
+X | G | D |- @perform op : (t1 -> <l | eff> t2)[as^{\overline{k}} := ts] | eff' ~> @perform^{eff} op ts
+~
+
+~ infer
+X | G | D |= h : t | l | eff ~> h'
+\quad X |-wf eff' : ke
+-------------------------------------------------------------------[Handler]
+X | G | D |- @handler h : (() -> <l | eff> t) -> eff t) | eff' ~> @handler^{eff} h'
+~
+
+~ infer
+op_i : \forall as^{\overline{k}}_i. t1^i -> t2^i \in S(l) \quad as^{\overline{k}}_i \not \in @ftv(eff, t) \quad \\
+X | G | D |- v_i : \forall as^{\overline{k}}_i. t1^i -> eff ((t2^i -> eff t) -> eff t) | <> ~> v'_i
+---------------------------------------------------------------------------------------------[Ops]
+X | G | D |= \{op_1 -> v1, ... , op_n -> v_n \} : t | l | eff ~> \{op_1 -> v1', ... , op_n -> v'_n \}
+~
+~ End Column
+~ End Figure
+
+
+
+
+~ Begin Figure { #fig-system-effx-types; caption:"Types of System F$^eff$+$@restrict$"; .align-left; }
+
+~ begin Columns {  }
+~ begin Column { width:50%; padding-right:2em;  }
+
+|~~~~~|~~~~:|~~~~~~~~~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| Types                      |||                                |
+| $s$ | ::= | $a^k$            | (type variables of kind $k$)   |
+|     | \|  | $c^k t ... t$    | (type constructor of kind $k$) |
+|     | \|  | $s -> eff s$     | (function type)                |
+|     | \|  | $\forall a^k. s$ | (quantified type)              |
+~ End Column
+~ begin Column { }
+
+|~~~~~|~~~~:|~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| Kinds              |||                            |
+| $k$ | ::= | $*$      | (value type)               |
+|     | \|  | $k -> k$ | (type constructors)        |
+|     | \|  | $ke$     | (effect type ($mu$,$eff$)) |
+|     | \|  | $kl$     | (basic effect ($l$))       |
+
+~ End Column
+~ End Columns
+
+&medskip;
+
+|~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~|~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| Effect signature   | $sig$               | ::=  | $\{ op_1 : \forall as_1. s1 -> s1', ..., op_n : \forall as_n. s_n -> s'_n\}$ ||
+| Effect signatures  | $S$                 | ::=  | $\{l_1 : sig_1, ..., l_n : sig_n \}$                                         ||
+| Type\ Constructors | $<>$                | :    | $ke$                                  | empty effect row (total)              |
+|                    | ${<\_|\_>}$         | :    | $kl -> ke -> ke$                      | effect row extension                  |
+| \                  |                     |      |                                       |                                       |
+| Syntax             | $<l1,...,l_n>$      | $.=$ | ${<l1 | ... | <l_n | <>> ... >}$      |                                       |
+|                    | ${<l1,...,l_n|mu>}$ | $.=$ | ${<l1 | ... | <l_n | mu> ... >}$      |                                       |
+|                    | $eff$ ::= $s^ke$, &quad; $mu$ ::= $a^ke$, &quad; $l$ ::= $c^kl$  |||                                       |
+
+~ End Figure
+
+~ Begin Figure { #fig-system-effx-syn; caption: "Expressions and Operational Sematics of F$^eff$+$@restrict$"; .align-left; }
+
+~ begin Columns {  }
+~ begin Column {   }
+
+
+|~~~~~~~~|~~~~:|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| Expressions                                 |||                           |
+| $expr$ | ::= | $v$                            | (value)                   |
+|        | \|  | $e e$                          | (application)             |
+|        | \|  | $e[s]$                         | (type application)        |
+|        | \|  | $@handle h e$                  | (handler instance)        |
+|        | \|  | $@restrict^{<l1,...,l_n>} v$   | (restrict)                |
+
+~ End Column
+~ begin Column { }
+
+|~~~~~|~~~~:|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|~~~~~~~~~~~~~~~~~~~~|
+| Values                                |||                    |
+| $v$ | ::= | $x$                         | (variables)        |
+|     | \|  | $\lambda^{eff}x:s. e$       | (abstraction)      |
+|     | \|  | $\Lambda a^k. e$            | (type abstraction) |
+|     | \|  | $@handler^eff h$            | (effect handler)   |
+|     | \|  | $@perform^eff op ss$ &quad; | (operation)        |
+
+
+
+
+~ End Column
+~ End Columns
+
+&medskip;
+
+|~~~~~~~~~~~~~~~~~~~~~|~~~~~|~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| Handlers            | $h$ | ::= | $\{op_1 -> f1, ..., op_n -> f_n \}$                       |
+| Evaluation\ Context | $F$ | ::= | $\square{} \mid F e \mid v F \mid F s$                    |
+|                     |     | \|  | $@restrict^{<l1,...,l_n>} F$                              |
+|                     | $E$ | ::= | $\square{} \mid E e \mid v E \mid E s$                    |
+|                     |     | \|  | $@handle h E \mid @restrict^{<l1,...,l_n>} E$             |
+
+&medskip;
+
+|:~~~~~~~~~~~~~|:~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|:~~~~~~|:~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
+| $(app)$      | $(\lambda^{eff}x:s. e) v$       | $-->$ | $e[x:=v] $                                                        |
+| $(handler)$  | $(@handler^eff h) v$            | $-->$ | $@handle h (v ())$                                                |
+| $(return)$   | $@handle h v$                   | $-->$ | $v$                                                               |
+| $(perform)$  | $@handle h E[@perform op ss v]$ | $-->$ | $f[ss] v k$ &quad; iff $op\notin @bop(E) \wedge{} (op -> f) \in h$ |
+|              |                                 |       | where $op : \forall as. s1 -> s2 \in S(l)$                        |
+| $(restrict)$ | $@restrict^{<l1,...,l_n>} v$      | $-->$ | $v$                                                               |
+
+~ Begin Columns
+~ Begin Column
+~ infer
+e  -->  e'
+-------------------------[step]
+E[e] !--> E[e']
+~
+~ End Column
+
+~ Begin Column
+~ mathpre
+@bop(\square) &= \emptyset
+@bop(E e) &= @bop(E)
+@bop(v E) &= @bop(E)
+@bop(@handle h E) &= @bop(E) \cup \{op \mid (op -> f) \in h \}
+@bop(@restrict^{<l1,...,l_n>} E) &= @bop(E)
+~
+~ End Column
+~ End Columns
+~ End Figure
+
+
+~ Begin Figure { #fig-fe-rules; caption:"Typing Rules of F$^eff$+$@restrict$"; .align-left }
+~ mathpre {.typerule}
+\inh{G} |- \inhx{e}{F^{eff}} : \syn{s} | \inh{eff}  %
+\quad\quad \inh{G} |-val \inhx{v}{F^{eff}} : \syn{s}  %
+\quad\quad \inh{G} |-ops \inhx{h}{F^{eff}} : \syn{s} | \syn{l} | \inh{eff}
+~
+
+~ Begin Columns
+~ Begin Column
+~ End Column
+
+~ Begin Column
+~ End Column
+~ End Columns
+
+~ Begin Columns
+~ Begin Column
+~ infer
+G |- e : s | <l1,...,l_n> \quad G |-wf eff: ke
+-------------------------------------------------------[Restrict]
+G |- @restrict^{<l1,...,l_n>} e : s | <l1,...,l_n | eff>
+~
+~ End Column
+
+~ Begin Column
+~ infer
+x : s  \in G
+---------------- [Var]
+G |-val x : s
+~
+~ End Column
+~ End Columns
+
+~ Begin Columns
+~ Begin Column
+~ infer
+G, x : s1 |-  e : s2 | eff \quad G |-wf s1 : *
+---------------------------------------------------- [Lam]
+G |-val \lambda^eff x : s1. e  : s1 -> eff s2
+~
+~ End Column
+
+~ Begin Column
+~ infer
+G |-val v : s \quad G |-wf eff : ke
+------------------------------------------------------- [Val]
+G |- v : s | eff
+~
+~ End Column
+~ End Columns
+
+~ Begin Columns
+~ Begin Column
+~ infer
+G |- e1 : s2 -> eff s | eff  \quad G |- e2 : s2 | eff
+---------------------------------------------------------------[App]
+G |- e1 e2 : s | eff
+~
+~ End Column
+
+
+~ End Columns
+
+~ Begin Column
+~ infer
+G |- e : s | <>
+\quad a^k \not \in @ftv(G)
+\quad k !== @lab
+----------------------------------------[TAbs]
+G |-val \Lambda a^k.e : \forall a. s
+~
+~ End Column
+
+~ infer
+G |- e : \forall a^k.s1 | eff \quad G |-wf s' :  k
+-----------------------------------------------------[TApp]
+G |- e [s']: s[a:=s'] | eff
+~
+
+
+~ infer
+op : \forall as^{\overline{k}}. s1 -> s2 \in \Sigma(l) \quad as^{\overline{k}} \not \in @ftv(G) \quad G |-wf eff : ke
+-------------------------------------------------------------------------------------------------[Perform]
+G |-val @perform^{eff} @op ss : s1[as^{\overline{k}} := ss] -> <l|eff> s2[as^{\overline{k}} := ss]
+~
+
+~ infer
+G |-ops h : s | l | eff      G |- e : s | <l | eff>
+--------------------------------------------------------[Handle]
+G |- @handle^eff h e : s | eff
+~
+
+
+~ infer
+G |-ops h : s | l | eff
+------------------------------------------------------[Handler]
+G |-val @handler^eff h : (() -> <l | eff> s) -> eff s
+~
+
+
+~ infer
+op_i : \forall as^{\overline{k}}. s1 -> s2 \in \Sigma(l)
+\quad as^{\overline{k}} \not \in @ftv(G) \quad
+G |-val v_i : \forall as^{\overline{k}}. s1 -> eff ((s2 -> eff s) -> s)
+-------------------------------------------------------------------------------------------------[OPs]
+G |-ops \{op_1 -> v_1,...,op_n -> v_n\} : s | l | eff
+~
+~ End Figure
+
+In this appendix, we present an extension of System F$^eff$, which we call System F$^eff$+$@restrict$, and a type-directed translation from $@ImpKoka$ to System F$^eff$+$@restrict$.
+The translation allows us to prove the type soundness of $@ImpKoka$ without directly defining an operational semantics for $@ImpKoka$.
+This is a well-known technique, and is used in [@Leijen:hmf], for instance.
+The target calculus of the translation has a new construct $@restrict$, which is necessary for establishing soundness of the translation.
+
+# System F$^eff$+$@restrict$ { @h1:"A" }
+In Figures [#fig-system-effx-types] to [#fig-fe-rules], we define the syntax, operational semantics, and typing rules of System F$^eff$+$@restrict$.
+The typing rule $[Restrict]$ extends the closed effect row $<l1,..,l_n>$ of the expression $e$ to $<l_1,...l_n|eff>$, where $eff$ is an arbitrary effects.
+
+We can prove the type soundness of Sysmtem F$^eff$+$@restrict$ by showing the follwing theorems.
+
+~ Theorem { #th-progress; caption:"progress"}
+If $\emptyset |- e1 : s | <>$ then either $e1$ is a value or $e1 !--> e2$.
+~
+
+~ Theorem { #th-progress; caption:"preservation"}
+If $\emptyset |- e1 : s | <>$ and $e1 !--> e2$ then $\emptyset |- e2 : s | <>$.
+~
+
+
+# Type-Directed Translation to System F$^eff+@restrict$ { @h1:"B" }
+In Figure [#fig-type-trans], we next define the type-directed translation from $@ImpKoka$ to System F$^eff$+$@restrict$.
+The judgment $X | G | D |- e : s | eff ~> e'$ states that an expression $e$ has type $s$ and effect $eff$ under the type variable context $X$ and typing contexts $G$ and $D$, and translates to an expression $e'$ of System F$^eff$+$@restrict$.
+We can easily prove the soundness of the type-directed translation.
+
+~ Theorem { #th-soundnessoftranslation; caption:"soundness of type-directed translation"}
+If $X | G | D |- e : s | eff ~> e'$ then $G, D |- e' : s | eff$.
+~
+~ Proof
+By straightforward induction on the typing derivation.
+~
+
+~ End Extended
+
+[BIB]
